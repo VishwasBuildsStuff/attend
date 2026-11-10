@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#09090b" />
+  <meta name="description" content="Sign in or create your BunkBudget student account." />
+  <title>Account · BunkBudget</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #09090b; color: #fafafa; }
+    * { box-sizing: border-box; }
+    body { min-height: 100vh; margin: 0; display: grid; place-items: center; padding: 24px; background: radial-gradient(ellipse at 50% 0%, rgba(16,185,129,.14), transparent 48%), #09090b; }
+    .auth-card { width: min(100%, 460px); padding: 34px; border: 1px solid #27272a; border-radius: 16px; background: rgba(17,17,19,.96); box-shadow: 0 24px 80px rgba(0,0,0,.45); }
+    .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 26px; }
+    .brand-mark { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; color: #052e22; background: #34d399; font-size: 22px; }
+    .brand-name { margin: 0; font-size: 18px; font-weight: 750; letter-spacing: -.03em; }
+    .brand-subtitle { margin: 3px 0 0; color: #a1a1aa; font-size: 12px; }
+    h1 { margin: 0; font-size: 25px; letter-spacing: -.04em; }
+    .intro { margin: 8px 0 22px; color: #a1a1aa; font-size: 14px; line-height: 1.55; }
+    .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 20px; padding: 4px; border: 1px solid #27272a; border-radius: 10px; background: #09090b; }
+    .tab { height: 36px; margin: 0; border: 0; border-radius: 7px; background: transparent; color: #a1a1aa; cursor: pointer; font: inherit; font-size: 13px; font-weight: 650; }
+    .tab.active { background: #27272a; color: #fafafa; }
+    .field { margin-top: 15px; }
+    label { display: block; margin-bottom: 7px; color: #e4e4e7; font-size: 13px; font-weight: 600; }
+    input, select { width: 100%; height: 44px; padding: 0 12px; border: 1px solid #3f3f46; border-radius: 9px; outline: 0; background: #09090b; color: #fafafa; font: inherit; font-size: 14px; transition: border-color .15s, box-shadow .15s; }
+    input::placeholder { color: #71717a; }
+    input:focus, select:focus { border-color: #34d399; box-shadow: 0 0 0 3px rgba(52,211,153,.14); }
+    .field-hint { margin: 6px 0 0; color: #71717a; font-size: 11px; line-height: 1.45; }
+    .primary-button { width: 100%; height: 45px; margin-top: 22px; border: 0; border-radius: 9px; background: #34d399; color: #052e22; cursor: pointer; font: inherit; font-size: 14px; font-weight: 700; }
+    .primary-button:hover:not(:disabled) { filter: brightness(1.08); }
+    button:disabled { cursor: wait; opacity: .65; }
+    .error-message { margin: 14px 0 0; padding: 11px 12px; border: 1px solid rgba(248,113,113,.35); border-radius: 8px; background: rgba(127,29,29,.2); color: #fca5a5; font-size: 13px; line-height: 1.5; }
+    .error-message[hidden], [hidden] { display: none !important; }
+    .footer-note { margin: 19px 0 0; color: #71717a; font-size: 11px; line-height: 1.5; text-align: center; }
+    @media (max-width: 480px) { body { padding: 14px; } .auth-card { padding: 26px 20px; } }
+  </style>
+</head>
+<body>
+  <main class="auth-card">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">✓</div>
+      <div><p class="brand-name">BunkBudget</p><p class="brand-subtitle">Student attendance tracker</p></div>
+    </div>
+    <h1 id="form-title">Welcome back</h1>
+    <p id="form-intro" class="intro">Sign in to view and manage your attendance.</p>
+
+    <div class="tabs" role="tablist" aria-label="Account access">
+      <button id="login-tab" class="tab active" type="button" role="tab" aria-selected="true">Login</button>
+      <button id="register-tab" class="tab" type="button" role="tab" aria-selected="false">Create account</button>
+    </div>
+
+    <form id="login-form" novalidate>
+      <div class="field">
+        <label for="login-identifier">USN / Registration number / Email</label>
+        <input id="login-identifier" type="text" autocomplete="username" placeholder="Enter your USN, registration number, or email" maxlength="254" required />
+      </div>
+      <div class="field">
+        <label for="login-password">Password</label>
+        <input id="login-password" type="password" autocomplete="current-password" placeholder="Enter your password" required />
+      </div>
+      <button id="login-submit" class="primary-button" type="submit">Sign in</button>
+      <div id="login-error" class="error-message" role="alert" aria-live="assertive" hidden></div>
+    </form>
+
+    <form id="register-form" hidden novalidate>
+      <div class="field">
+        <label for="full_name">Full name</label>
+        <input id="full_name" type="text" autocomplete="name" placeholder="Your full name" maxlength="120" required />
+      </div>
+      <div class="field">
+        <label for="student-class">Class</label>
+        <input id="student-class" type="text" placeholder="e.g. CSE-A" maxlength="80" required />
+      </div>
+      <div class="field">
+        <label for="register-usn">USN</label>
+        <input id="register-usn" type="text" autocomplete="username" placeholder="Enter your 10-character USN" minlength="10" maxlength="10" required />
+      </div>
+      <div class="field">
+        <label for="registration-number">Registration number</label>
+        <input id="registration-number" type="text" placeholder="Enter your registration number" maxlength="40" required />
+      </div>
+      <div class="field">
+        <label for="register-email">Email / Gmail</label>
+        <input id="register-email" type="email" autocomplete="email" placeholder="you@example.com" maxlength="254" required />
+      </div>
+      <div class="field">
+        <label for="phone-number">Phone number</label>
+        <input id="phone-number" type="tel" autocomplete="tel" placeholder="10–15 digits, country code optional" maxlength="20" required />
+      </div>
+      <div class="field">
+        <label for="register-password">Create password</label>
+        <input id="register-password" type="password" autocomplete="new-password" minlength="8" maxlength="72" placeholder="At least 8 characters" required />
+      </div>
+      <div class="field">
+        <label for="password-confirmation">Confirm password</label>
+        <input id="password-confirmation" type="password" autocomplete="new-password" minlength="8" maxlength="72" placeholder="Enter the password again" required />
+      </div>
+      <button id="register-submit" class="primary-button" type="submit">Create account</button>
+      <div id="register-error" class="error-message" role="alert" aria-live="assertive" hidden></div>
+    </form>
+    <p class="footer-note">Use your student details and a password you can remember. Sign in later with your USN, registration number, or email.</p>
+  </main>
+  <script src="api-config.js"></script>
+  <script src="auth.js"></script>
+</body>
+</html>

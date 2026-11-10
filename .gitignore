@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.py[cod]
+.neon
+node_modules/
+dist/
+Student_Detailed_Attendance_Summary_*.pdf

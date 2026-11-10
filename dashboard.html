@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="BunkBudget &amp; Attendance Tracker — calculate your bunk budget, recovery mode, and subject-wise attendance." />
+  <meta name="theme-color" content="#121212" />
+  <title>BunkBudget</title>
+
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ===== Header ===== -->
+  <header class="site-header">
+    <div class="container header-inner">
+      <div class="brand">
+        <span class="brand-icon">🎓</span>
+        <div>
+          <h1 class="brand-title">BunkBudget</h1>
+          <p class="brand-sub">&amp; Attendance Tracker</p>
+        </div>
+      </div>
+      <button id="resetBtn" class="btn btn-danger-outline" title="Clear saved tracker data">
+        ⟲ Reset Tracker
+      </button>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <!-- ===== Dashboard Card ===== -->
+    <section class="card glass" aria-labelledby="dashTitle">
+      <h2 id="dashTitle" class="card-title">Overall Dashboard</h2>
+
+      <div class="grid-2">
+        <!-- Inputs -->
+        <div class="input-group">
+          <label for="presentInput">Classes Attended (Present)</label>
+          <input type="number" id="presentInput" min="0" step="1" placeholder="e.g. 42" inputmode="numeric" />
+
+          <label for="totalInput">Classes Conducted (Total)</label>
+          <input type="number" id="totalInput" min="0" step="1" placeholder="e.g. 60" inputmode="numeric" />
+
+          <label for="naInput" title="No-Attendance slots are excluded from the total">
+            "No Attendance" (NA) Slots <span class="hint">(excluded from Total)</span>
+          </label>
+          <input type="number" id="naInput" min="0" step="1" placeholder="e.g. 3" inputmode="numeric" />
+
+          <label id="targetLabel">Target Percentage</label>
+          <div class="target-toggle" role="group" aria-labelledby="targetLabel">
+            <button id="target75" class="toggle-btn active" data-target="0.75">75% Standard</button>
+            <button id="target76" class="toggle-btn" data-target="0.76">76% Safe Target</button>
+          </div>
+        </div>
+
+        <!-- Circular Progress -->
+        <div class="progress-wrap">
+          <div class="circular-progress" id="circleProgress" style="--progress: 0;">
+            <svg viewBox="0 0 120 120" aria-hidden="true">
+              <circle class="ring-bg" cx="60" cy="60" r="52"></circle>
+              <circle class="ring-fg" cx="60" cy="60" r="52"></circle>
+            </svg>
+            <div class="circle-center">
+              <span id="percentText" class="percent-text">—</span>
+              <span class="percent-label">attendance</span>
+            </div>
+          </div>
+          <p id="effectiveStats" class="effective-stats">Enter your stats to see results.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Bunk Budget / Recovery Mode ===== -->
+    <section class="grid-2 results-grid" aria-label="Calculator results">
+
+      <!-- Bunk Budget Card -->
+      <section class="card glass result-card safe-card hidden" id="bunkCard">
+        <h3 class="result-title">✅ Bunk Budget</h3>
+        <p class="big-number emerald" id="bunkCount">0</p>
+        <p class="result-desc" id="bunkDesc">
+          You can safely skip this many classes and stay above your target.
+        </p>
+      </section>
+
+      <!-- Recovery Mode Card -->
+      <section class="card glass result-card warn-card hidden" id="recoveryCard">
+        <h3 class="result-title">🚨 Recovery Mode</h3>
+        <p class="big-number rose" id="recoveryCount">0</p>
+        <p class="result-desc" id="recoveryDesc">
+          Attend these consecutive classes to pull your average up to target.
+        </p>
+      </section>
+
+      <!-- Status card when exactly at/edge of target -->
+      <section class="card glass result-card neutral-card hidden" id="statusCard">
+        <h3 class="result-title" id="statusTitle">ℹ️ Status</h3>
+        <p class="result-desc" id="statusDesc"></p>
+      </section>
+    </section>
+
+    <!-- ===== Subject-wise Tracker ===== -->
+    <section class="card glass" aria-labelledby="subjTitle">
+      <h2 id="subjTitle" class="card-title">Subject-wise Tracker</h2>
+
+      <form id="subjectForm" class="subject-form" autocomplete="off">
+        <div class="field">
+          <label for="subjName">Subject Name</label>
+          <input type="text" id="subjName" placeholder="e.g. Discrete Mathematics" required maxlength="60" />
+        </div>
+        <div class="field field-sm">
+          <label for="subjPresent">Present</label>
+          <input type="number" id="subjPresent" min="0" step="1" placeholder="0" required inputmode="numeric" />
+        </div>
+        <div class="field field-sm">
+          <label for="subjTotal">Total</label>
+          <input type="number" id="subjTotal" min="0" step="1" placeholder="0" required inputmode="numeric" />
+        </div>
+        <button type="submit" class="btn btn-primary">+ Add Subject</button>
+      </form>
+
+      <div id="subjectList" class="subject-list" aria-live="polite">
+        <!-- Subjects rendered by app.js -->
+      </div>
+
+      <p id="emptySubjects" class="empty-note">No subjects added yet. Add one above to track them individually.</p>
+    </section>
+
+    <!-- ===== Day Bunking ===== -->
+    <section class="card glass" aria-labelledby="dayBunkTitle">
+      <h2 id="dayBunkTitle" class="card-title">Day Bunking</h2>
+      <p class="day-bunk-intro">Build your weekly timetable one class at a time, then check it against your selected target. Each scheduled occurrence subtracts one from that subject’s current attended count.</p>
+
+      <div class="day-bunk-controls">
+        <div class="field">
+          <label for="daySelect">Day to schedule or check</label>
+          <select id="daySelect" class="day-select">
+            <option>Monday</option>
+            <option>Tuesday</option>
+            <option>Wednesday</option>
+            <option>Thursday</option>
+            <option>Friday</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="timetableSubject">Subject for this class</label>
+          <select id="timetableSubject" class="day-select" disabled>
+            <option value="">Add a subject above first</option>
+          </select>
+        </div>
+        <button id="addTimetableClass" class="btn btn-primary" type="button" disabled>+ Add class</button>
+      </div>
+
+      <div class="day-schedule-heading">
+        <h3 id="scheduleTitle">Monday timetable</h3>
+        <span id="scheduleCount" class="schedule-count">0 classes</span>
+      </div>
+      <div id="dayScheduleList" class="day-schedule-list" aria-live="polite"></div>
+      <p id="emptyDaySchedule" class="empty-note">No classes assigned to this day yet.</p>
+
+      <button id="simulateDayBtn" class="btn btn-primary simulate-day-btn" type="button">Check if I can bunk this day</button>
+      <div id="dayBunkResult" class="day-bunk-result" role="status" aria-live="polite" hidden></div>
+    </section>
+
+    <!-- ===== Attendance Report Archive ===== -->
+    <section class="card glass" aria-labelledby="reportsTitle">
+      <h2 id="reportsTitle" class="card-title">Attendance Report Archive</h2>
+      <p class="report-intro">Drop a downloaded report here to save a new version. Earlier versions stay available in this browser.</p>
+      <label id="reportDropZone" class="report-drop-zone" for="reportFileInput" tabindex="0">
+        <span class="drop-icon" aria-hidden="true">⇧</span>
+        <span class="drop-title">Drag and drop an attendance report</span>
+        <span class="drop-hint">or choose a PDF, CSV, Excel, or JSON file · kept on this device</span>
+        <input id="reportFileInput" type="file" accept=".pdf,.csv,.xls,.xlsx,.json,application/pdf,text/csv,application/json" multiple hidden />
+      </label>
+      <p id="reportStatus" class="report-status" role="status" aria-live="polite"></p>
+      <div id="reportList" class="report-list" aria-live="polite"></div>
+      <p id="emptyReports" class="empty-note">No reports saved yet. Add a report to start its version history.</p>
+    </section>
+
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>BunkBudget &amp; Attendance Tracker · Vanilla JS · Local storage with optional cloud sync</p>
+    </div>
+  </footer>
+
+  <script>
+    const accessToken = localStorage.getItem('bunkbudget:accessToken');
+    if (!accessToken) window.location.replace('auth.html');
+    window.BUNKBUDGET_GET_ACCESS_TOKEN = () => localStorage.getItem('bunkbudget:accessToken');
+  </script>
+  <script src="api-config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
