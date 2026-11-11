@@ -103,6 +103,9 @@ Displays a prominent warning card: *"Attend the next X classes in a row to reach
 
 ## 📅 Feature and Version History
 
+### Version 2.1.1 — 2026-11-11
+- **Login API diagnostics:** Show actionable guidance when the configured API returns 404 or is unavailable, instead of a generic request error.
+
 ### Version 2.1.0 — 2026-11-11
 - **Attendance PDF import:** Parse subject attendance from text-based shortage reports, review/edit detected subject totals, then update matching subjects while preserving other manual entries.
 - **Timetable PDF import:** Detect weekday/subject entries, review/edit them, then merge into or replace the current timetable.
@@ -201,7 +204,7 @@ To grant the one configured owner admin access, first create that account, then 
 
 ### Login troubleshooting
 
-For local use, confirm the backend dependencies are installed, `.env` contains a reachable PostgreSQL `DATABASE_URL` and `SECRET_KEY`, `uvicorn main:app --reload --port 8000` is running, and the frontend is served from `http://localhost:5500` (not opened directly as a `file://` page). In production, confirm the Render API service is healthy and the Netlify build used the correct `BUNKBUDGET_API_URL` if the Render URL differs from the default.
+For local use, confirm the backend dependencies are installed, `.env` contains a reachable PostgreSQL `DATABASE_URL` and `SECRET_KEY`, `uvicorn main:app --reload --port 8000` is running, and the frontend is served from `http://localhost:5500` (not opened directly as a `file://` page). In production, open `https://your-render-service.onrender.com/api/health` and confirm it returns `{"status":"ok"}`. A Render `404 Not Found` with `x-render-routing: no-server` means there is no web service deployed at that hostname. Deploy the FastAPI service from `render.yaml`, then set Netlify's `BUNKBUDGET_API_URL` to that exact Render service origin and redeploy the Netlify site.
 
 ---
 

@@ -51,7 +51,11 @@
         ? 'Invalid USN, registration number, email, or password.'
         : response.status === 409
           ? 'An account already exists with this USN, registration number, or email.'
-          : detail || 'Unable to complete the request. Please try again.';
+          : response.status === 404
+            ? 'The login API was not found. Deploy the FastAPI service on Render and point Netlify BUNKBUDGET_API_URL to its service URL.'
+            : [502, 503, 504].includes(response.status)
+              ? 'The login server is unavailable. Check that the FastAPI service is running on Render.'
+              : detail || `The server could not complete the request (HTTP ${response.status}). Check the API deployment logs and try again.`;
       throw new Error(message);
     }
     return body;
