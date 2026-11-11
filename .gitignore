@@ -4,4 +4,5 @@ __pycache__/
 .neon
 node_modules/
 dist/
+.netlify/
 Student_Detailed_Attendance_Summary_*.pdf

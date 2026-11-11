@@ -131,6 +131,50 @@
       <p id="emptySubjects" class="empty-note">No subjects added yet. Add one above to track them individually.</p>
     </section>
 
+    <!-- ===== PDF smart import ===== -->
+    <section class="card glass" aria-labelledby="pdfImportTitle">
+      <h2 id="pdfImportTitle" class="card-title">Import your attendance and timetable</h2>
+      <p class="report-intro">Upload the attendance shortage PDF and weekly timetable PDF. They are read on this device, then you can review the results before updating your tracker. Each PDF is also kept in the report archive.</p>
+
+      <div class="pdf-import-grid">
+        <div>
+          <label id="attendancePdfDrop" class="report-drop-zone pdf-import-zone" for="attendancePdfInput" tabindex="0">
+            <span class="drop-icon" aria-hidden="true">▤</span>
+            <span class="drop-title">Attendance shortage report</span>
+            <span class="drop-hint">Drop a PDF or choose a file</span>
+            <input id="attendancePdfInput" type="file" accept="application/pdf,.pdf" hidden />
+          </label>
+          <p id="attendancePdfStatus" class="report-status" role="status" aria-live="polite"></p>
+        </div>
+        <div>
+          <label id="timetablePdfDrop" class="report-drop-zone pdf-import-zone" for="timetablePdfInput" tabindex="0">
+            <span class="drop-icon" aria-hidden="true">▦</span>
+            <span class="drop-title">Weekly timetable</span>
+            <span class="drop-hint">Drop a PDF or choose a file</span>
+            <input id="timetablePdfInput" type="file" accept="application/pdf,.pdf" hidden />
+          </label>
+          <p id="timetablePdfStatus" class="report-status" role="status" aria-live="polite"></p>
+        </div>
+      </div>
+      <p class="pdf-privacy-note">PDF text is extracted in your browser; the files are not sent to BunkBudget's API. Scanned image-only PDFs may need manual entry.</p>
+
+      <div id="attendanceImportPreview" class="pdf-import-preview" hidden>
+        <h3>Review attendance subjects</h3>
+        <p class="report-meta">Edit any extracted values before applying. Subjects you entered manually but which are absent from this PDF are kept.</p>
+        <label class="import-option"><input id="updateMatchingSubjects" type="checkbox" checked /> Update matching subjects from this report</label>
+        <div id="attendanceImportRows" class="pdf-import-rows"></div>
+        <button id="applyAttendanceImport" class="btn btn-primary" type="button">Apply attendance data</button>
+      </div>
+
+      <div id="timetableImportPreview" class="pdf-import-preview" hidden>
+        <h3>Review timetable classes</h3>
+        <p class="report-meta">Check the extracted day and subject for each class. You can edit or remove rows before applying.</p>
+        <label class="import-option"><input id="replaceTimetable" type="checkbox" /> Replace the current timetable (off keeps and merges your manual schedule)</label>
+        <div id="timetableImportRows" class="pdf-import-rows"></div>
+        <button id="applyTimetableImport" class="btn btn-primary" type="button">Apply timetable</button>
+      </div>
+    </section>
+
     <!-- ===== Day Bunking ===== -->
     <section class="card glass" aria-labelledby="dayBunkTitle">
       <h2 id="dayBunkTitle" class="card-title">Day Bunking</h2>
@@ -165,6 +209,12 @@
 
       <button id="simulateDayBtn" class="btn btn-primary simulate-day-btn" type="button">Check if I can bunk this day</button>
       <div id="dayBunkResult" class="day-bunk-result" role="status" aria-live="polite" hidden></div>
+
+      <div class="weekly-plan-block">
+        <h3>Weekly attend or bunk plan</h3>
+        <p class="report-meta">Uses your current attendance, target, and timetable. Bunk days shown are a plan for the coming week, not a guarantee for later weeks.</p>
+        <div id="weeklyPlanResult" class="weekly-plan-result" role="status" aria-live="polite"></div>
+      </div>
     </section>
 
     <!-- ===== Attendance Report Archive ===== -->
@@ -197,5 +247,6 @@
   </script>
   <script src="api-config.js"></script>
   <script src="app.js"></script>
+  <script type="module" src="pdf-import.js"></script>
 </body>
 </html>

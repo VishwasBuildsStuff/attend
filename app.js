@@ -106,6 +106,16 @@
   const reportList    = $('#reportList');
   const emptyReports  = $('#emptyReports');
   const reportStatus  = $('#reportStatus');
+  const attendanceImportPreview = $('#attendanceImportPreview');
+  const attendanceImportRows = $('#attendanceImportRows');
+  const updateMatchingSubjects = $('#updateMatchingSubjects');
+  const timetableImportPreview = $('#timetableImportPreview');
+  const timetableImportRows = $('#timetableImportRows');
+  const replaceTimetable = $('#replaceTimetable');
+  const weeklyPlanResult = $('#weeklyPlanResult');
+
+  let pendingAttendanceImport = [];
+  let pendingTimetableImport = [];
 
   const REPORT_DB = 'bunkbudget:reports:v1';
   const REPORT_STORE = 'reports';
@@ -157,6 +167,7 @@
     }
 
     renderCalculators({ present, effectiveTotal, pct, target });
+    renderWeeklyPlan();
   }
 
   /* ---------- Bunk Budget & Recovery Mode ---------- */
@@ -290,6 +301,7 @@
       chip.append(name, remove);
       dayScheduleList.appendChild(chip);
     });
+    renderWeeklyPlan();
   }
 
   function simulateDayBunk(day) {
@@ -372,6 +384,164 @@
       dayBunkResult.appendChild(note);
     }
     return result;
+  }
+
+  function subjectKey(name) {
+    return String(name).toLocaleLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+
+  function classesNeededToReachTarget(subject) {
+    const present = Math.min(toInt(subject.present), toInt(subject.total));
+    const total = toInt(subject.total);
+    if (!total || present / total >= state.target) return 0;
+    return Math.ceil((state.target * total - present) / (1 - state.target));
+  }
+
+  function renderWeeklyPlan() {
+    if (!weeklyPlanResult) return;
+    weeklyPlanResult.replaceChildren();
+
+    const classDays = WEEKDAYS.filter((day) => state.timetable[day]?.length);
+    if (!classDays.length) {
+      weeklyPlanResult.textContent = 'Add classes manually or import a timetable PDF to get a week plan.';
+      return;
+    }
+
+    const scheduleCounts = new Map();
+    for (const day of WEEKDAYS) {
+      for (const name of state.timetable[day] || []) {
+        const key = subjectKey(name);
+        scheduleCounts.set(key, (scheduleCounts.get(key) || 0) + 1);
+      }
+    }
+
+    const tracked = state.subjects
+      .filter((subject) => toInt(subject.total) > 0 && scheduleCounts.has(subjectKey(subject.name)))
+      .map((subject) => ({
+        ...subject,
+        present: Math.min(toInt(subject.present), toInt(subject.total)),
+        total: toInt(subject.total),
+        weekClasses: scheduleCounts.get(subjectKey(subject.name)) || 0,
+        neededNow: classesNeededToReachTarget(subject),
+        perDay: Object.fromEntries(WEEKDAYS.map((day) => [
+          day,
+          (state.timetable[day] || []).filter((name) => subjectKey(name) === subjectKey(subject.name)).length
+        ]))
+      }));
+
+    const needsManualAttendance = [...scheduleCounts.keys()]
+      .filter((key) => !state.subjects.some((subject) =>
+        subjectKey(subject.name) === key && toInt(subject.total) > 0
+      ));
+    const needsManualSchedule = state.subjects.filter((subject) =>
+      toInt(subject.total) > 0
+      && !scheduleCounts.has(subjectKey(subject.name))
+    );
+
+    const title = document.createElement('p');
+    title.className = 'weekly-plan-summary';
+    weeklyPlanResult.appendChild(title);
+
+    if (!tracked.length) {
+      title.textContent = 'Add attendance counts for the timetable subjects to calculate attend or bunk days.';
+    } else {
+      const dayPlans = [];
+      const possibilities = 1 << classDays.length;
+      for (let mask = 0; mask < possibilities; mask += 1) {
+        const attendedDays = classDays.filter((_, index) => mask & (1 << index));
+        const needsAfterWeek = tracked.map((subject) => {
+          const attendedClasses = attendedDays.reduce((count, day) => count + subject.perDay[day], 0);
+          const projectedPresent = subject.present + attendedClasses;
+          const projectedTotal = subject.total + subject.weekClasses;
+          const gap = state.target * projectedTotal - projectedPresent;
+          return gap <= 0 ? 0 : Math.ceil(gap / (1 - state.target));
+        });
+        const priorityCoverage = tracked.reduce((sum, subject) => {
+          if (!subject.neededNow) return sum;
+          return sum + attendedDays.reduce((count, day) => count + subject.perDay[day], 0);
+        }, 0);
+        dayPlans.push({
+          attendedDays,
+          remainingClassesNeeded: needsAfterWeek.reduce((sum, count) => sum + count, 0),
+          safe: needsAfterWeek.every((count) => count === 0),
+          priorityCoverage
+        });
+      }
+
+      // A plan is only safe when every scheduled subject has attendance data and
+      // every attendance subject is represented in the timetable.
+      const planComplete = !needsManualAttendance.length && !needsManualSchedule.length;
+      const safePlans = planComplete ? dayPlans.filter((plan) => plan.safe) : [];
+      const comparePlan = (left, right) =>
+        left.attendedDays.length - right.attendedDays.length
+        || right.priorityCoverage - left.priorityCoverage;
+      const chosen = safePlans.length
+        ? safePlans.sort(comparePlan)[0]
+        : dayPlans.sort((left, right) =>
+          left.remainingClassesNeeded - right.remainingClassesNeeded || comparePlan(left, right)
+        )[0];
+      const bunkDays = classDays.filter((day) => !chosen.attendedDays.includes(day));
+      const attendedLabel = chosen.attendedDays.length ? chosen.attendedDays.join(', ') : 'no scheduled days';
+
+      title.textContent = safePlans.length
+        ? `Recommended this week: attend ${attendedLabel}.`
+        : planComplete
+          ? `Your current shortfall needs more than one timetable week. Prioritize ${attendedLabel}; keep attending after this week.`
+          : `Provisional for subjects with complete data: prioritize ${attendedLabel}. Complete the records below before relying on a whole-day bunk plan.`;
+
+      if (safePlans.length) {
+        const bunkNote = document.createElement('p');
+        bunkNote.textContent = bunkDays.length
+          ? `With this plan, you can individually bunk ${bunkDays.join(', ')} this week while keeping tracked subjects at ${state.target * 100}%.`
+          : 'This week, the plan needs every scheduled day to stay on target.';
+        weeklyPlanResult.appendChild(bunkNote);
+      } else if (planComplete) {
+        const remainingNote = document.createElement('p');
+        remainingNote.textContent = `After this week, the tracked subjects still need about ${chosen.remainingClassesNeeded} attended class${chosen.remainingClassesNeeded === 1 ? '' : 'es'} to reach the ${state.target * 100}% target.`;
+        weeklyPlanResult.appendChild(remainingNote);
+      } else {
+        const incompleteNote = document.createElement('p');
+        incompleteNote.textContent = 'No whole-day bunk recommendation is available until each scheduled subject has attendance data and each attendance subject is on the timetable.';
+        weeklyPlanResult.appendChild(incompleteNote);
+      }
+    }
+
+    const recoverySubjects = state.subjects.filter((subject) => classesNeededToReachTarget(subject) > 0);
+    if (recoverySubjects.length) {
+      const recoveryHeading = document.createElement('h4');
+      recoveryHeading.textContent = 'Recovery needed by subject';
+      weeklyPlanResult.appendChild(recoveryHeading);
+      const list = document.createElement('ul');
+      recoverySubjects.forEach((subject) => {
+        const needed = classesNeededToReachTarget(subject);
+        const perDay = WEEKDAYS.map((day) => ({
+          day,
+          count: (state.timetable[day] || []).filter((name) => subjectKey(name) === subjectKey(subject.name)).length
+        })).filter((entry) => entry.count > 0);
+        const bestPerDay = Math.max(0, ...perDay.map((entry) => entry.count));
+        const estimatedDays = bestPerDay ? Math.ceil(needed / bestPerDay) : null;
+        const bestDays = perDay.filter((entry) => entry.count === bestPerDay).map((entry) => entry.day);
+        const item = document.createElement('li');
+        item.textContent = estimatedDays
+          ? `${subject.name}: attend ${needed} classes (about ${estimatedDays} scheduled day${estimatedDays === 1 ? '' : 's'} on ${bestDays.join(' or ')}, which has ${bestPerDay} per week).`
+          : `${subject.name}: attend ${needed} classes; add this subject to your timetable for a day estimate.`;
+        list.appendChild(item);
+      });
+      weeklyPlanResult.appendChild(list);
+    }
+
+    if (needsManualAttendance.length) {
+      const note = document.createElement('p');
+      const names = WEEKDAYS.flatMap((day) => state.timetable[day] || [])
+        .filter((name) => needsManualAttendance.includes(subjectKey(name)));
+      note.textContent = `Add attendance counts for timetable subjects with no attendance record: ${[...new Set(names)].join(', ')}.`;
+      weeklyPlanResult.appendChild(note);
+    }
+    if (needsManualSchedule.length) {
+      const note = document.createElement('p');
+      note.textContent = `Add these below-target subjects to the timetable to estimate days: ${needsManualSchedule.map((subject) => subject.name).join(', ')}.`;
+      weeklyPlanResult.appendChild(note);
+    }
   }
 
   window.BunkBudgetDayBunking = {
@@ -532,6 +702,206 @@
   // The existing app has no login provider. Call this from its auth callback:
   // window.BunkBudgetCloud.syncAfterLogin(accessToken)
   window.BunkBudgetCloud = { migrateLocalDataToCloud, fetchCloudAttendance, syncAfterLogin };
+
+  /* ---------- PDF import review and apply ---------- */
+  function showAttendanceImport(subjects, file) {
+    pendingAttendanceImport = subjects.map((subject) => ({ ...subject }));
+    attendanceImportRows.replaceChildren();
+    pendingAttendanceImport.forEach((subject, index) => {
+      const row = document.createElement('div');
+      row.className = 'pdf-import-row attendance-import-row';
+      row.dataset.index = String(index);
+
+      const name = document.createElement('input');
+      name.type = 'text';
+      name.maxLength = 100;
+      name.value = subject.name;
+      name.setAttribute('aria-label', `Subject name from ${file.name}`);
+
+      const present = document.createElement('input');
+      present.type = 'number';
+      present.min = '0';
+      present.step = '1';
+      present.value = String(subject.present);
+      present.setAttribute('aria-label', `Classes attended for ${subject.name}`);
+
+      const total = document.createElement('input');
+      total.type = 'number';
+      total.min = '1';
+      total.step = '1';
+      total.value = String(subject.total);
+      total.setAttribute('aria-label', `Total classes for ${subject.name}`);
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'mini-btn';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', () => row.remove());
+
+      [name, present, total].forEach((input) => row.appendChild(input));
+      row.appendChild(remove);
+      attendanceImportRows.appendChild(row);
+    });
+    attendanceImportPreview.hidden = !pendingAttendanceImport.length;
+  }
+
+  function showTimetableImport(timetable) {
+    pendingTimetableImport = WEEKDAYS.flatMap((day) =>
+      (timetable[day] || []).map((subject) => ({ day, subject }))
+    );
+    timetableImportRows.replaceChildren();
+    pendingTimetableImport.forEach((entry, index) => {
+      const row = document.createElement('div');
+      row.className = 'pdf-import-row timetable-import-row';
+      row.dataset.index = String(index);
+
+      const day = document.createElement('select');
+      day.setAttribute('aria-label', `Day for class ${index + 1}`);
+      WEEKDAYS.forEach((weekday) => {
+        const option = document.createElement('option');
+        option.value = weekday;
+        option.textContent = weekday;
+        option.selected = weekday === entry.day;
+        day.appendChild(option);
+      });
+
+      const subject = document.createElement('input');
+      subject.type = 'text';
+      subject.maxLength = 100;
+      subject.value = entry.subject;
+      subject.setAttribute('aria-label', `Subject for ${entry.day} class ${index + 1}`);
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'mini-btn';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', () => row.remove());
+
+      row.append(day, subject, remove);
+      timetableImportRows.appendChild(row);
+    });
+    timetableImportPreview.hidden = !pendingTimetableImport.length;
+  }
+
+  window.addEventListener('bunkbudget:attendance-pdf-ready', (event) => {
+    const { file, subjects } = event.detail;
+    if (!subjects.length) return;
+    showAttendanceImport(subjects, file);
+  });
+
+  window.addEventListener('bunkbudget:timetable-pdf-ready', (event) => {
+    const { file, timetable } = event.detail;
+    if (!WEEKDAYS.some((day) => timetable[day]?.length)) return;
+    showTimetableImport(timetable);
+  });
+
+  window.addEventListener('bunkbudget:pdf-selected', (event) => {
+    saveReportFiles([event.detail.file]);
+  });
+
+  $('#applyAttendanceImport').addEventListener('click', () => {
+    const rows = [...attendanceImportRows.querySelectorAll('.attendance-import-row')];
+    const imported = [];
+    for (const row of rows) {
+      const [nameInput, presentInput, totalInput] = row.querySelectorAll('input');
+      const name = nameInput.value.trim();
+      const present = toInt(presentInput.value);
+      const total = toInt(totalInput.value);
+      if (!name || total < 1 || present > total) {
+        $('#attendancePdfStatus').textContent = 'Check the imported subject names and counts. Attended classes must not exceed total classes.';
+        (name && total >= 1 && present > total ? presentInput : nameInput).focus();
+        return;
+      }
+      imported.push({ name, present, total });
+    }
+    if (!imported.length) {
+      $('#attendancePdfStatus').textContent = 'Keep at least one valid subject row to apply attendance.';
+      return;
+    }
+
+    let added = 0;
+    let updated = 0;
+    for (const item of imported) {
+      const existing = state.subjects.find((subject) => subjectKey(subject.name) === subjectKey(item.name));
+      if (existing) {
+        if (updateMatchingSubjects.checked) {
+          existing.present = item.present;
+          existing.total = item.total;
+          updated += 1;
+        }
+      } else {
+        state.subjects.push({
+          id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+          ...item
+        });
+        added += 1;
+      }
+    }
+    saveState();
+    renderDashboard();
+    renderSubjects();
+    persistAuthenticatedSubjects().catch((error) => console.error('Could not sync imported attendance:', error));
+    attendanceImportPreview.hidden = true;
+    $('#attendancePdfStatus').textContent = `Attendance updated: ${added} new subject${added === 1 ? '' : 's'} added and ${updated} matching subject${updated === 1 ? '' : 's'} refreshed. Other manual subjects were kept.`;
+  });
+
+  $('#applyTimetableImport').addEventListener('click', () => {
+    const rows = [...timetableImportRows.querySelectorAll('.timetable-import-row')];
+    const imported = Object.fromEntries(WEEKDAYS.map((day) => [day, []]));
+    rows.forEach((row) => {
+      const [daySelectInput, subjectInput] = row.querySelectorAll('select, input');
+      const day = daySelectInput.value;
+      const subject = subjectInput.value.trim();
+      if (WEEKDAYS.includes(day) && subject) imported[day].push(subject);
+    });
+    if (!WEEKDAYS.some((day) => imported[day].length)) {
+      $('#timetablePdfStatus').textContent = 'Keep at least one valid class row to apply the timetable.';
+      return;
+    }
+
+    const nextTimetable = replaceTimetable.checked ? createEmptyTimetable() : normalizeTimetable(state.timetable);
+    if (replaceTimetable.checked) {
+      WEEKDAYS.forEach((day) => { nextTimetable[day] = imported[day].slice(); });
+    } else {
+      WEEKDAYS.forEach((day) => {
+        const currentCounts = new Map();
+        const importedCounts = new Map();
+        (nextTimetable[day] || []).forEach((name) => {
+          const key = subjectKey(name);
+          currentCounts.set(key, (currentCounts.get(key) || 0) + 1);
+        });
+        imported[day].forEach((name) => {
+          const key = subjectKey(name);
+          importedCounts.set(key, (importedCounts.get(key) || 0) + 1);
+        });
+        for (const [key, count] of importedCounts) {
+          const toAdd = Math.max(0, count - (currentCounts.get(key) || 0));
+          const displayName = imported[day].find((name) => subjectKey(name) === key);
+          for (let index = 0; index < toAdd; index += 1) nextTimetable[day].push(displayName);
+        }
+      });
+    }
+
+    state.timetable = nextTimetable;
+    const importedNames = new Map();
+    WEEKDAYS.forEach((day) => imported[day].forEach((name) => importedNames.set(subjectKey(name), name)));
+    let placeholdersAdded = 0;
+    for (const [key, name] of importedNames) {
+      if (state.subjects.some((subject) => subjectKey(subject.name) === key)) continue;
+      state.subjects.push({
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+        name,
+        present: 0,
+        total: 0
+      });
+      placeholdersAdded += 1;
+    }
+    saveState();
+    renderSubjects();
+    persistAuthenticatedSubjects().catch((error) => console.error('Could not sync imported timetable subjects:', error));
+    timetableImportPreview.hidden = true;
+    $('#timetablePdfStatus').textContent = `Timetable applied. Your manual schedule was ${replaceTimetable.checked ? 'replaced as selected' : 'kept and merged'}; ${placeholdersAdded} subject${placeholdersAdded === 1 ? '' : 's'} need attendance counts.`;
+  });
 
   /* ---------- Attendance report archive ---------- */
   function openReportDb() {

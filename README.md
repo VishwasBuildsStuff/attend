@@ -51,6 +51,7 @@ Displays a prominent warning card: *"Attend the next X classes in a row to reach
 - Assign subject names to Monday-Friday schedules one class at a time. Repeated entries represent multiple classes of the same subject on that day.
 - Select a day to preview its timetable and simulate bunking it against the current 75% or 76% target.
 - The simulation subtracts one currently counted attended class for each scheduled occurrence, clamped at zero, and lists subjects projected below the target. Timetable assignments are saved with the local tracker data.
+- The weekly planner evaluates combinations of scheduled days and recommends an attend/bunk plan for the coming week. It flags missing attendance or timetable data and will not claim a plan is safe until those records are complete.
 
 ### 💾 Data Persistence
 - Overall inputs, target selection, and subjects auto-save to **`localStorage`** — data survives refreshes and browser restarts.
@@ -61,7 +62,9 @@ Displays a prominent warning card: *"Attend the next X classes in a row to reach
 - Drop or select downloaded **PDF, CSV, Excel, or JSON** attendance reports.
 - Each uploaded file is saved in this browser's IndexedDB storage. Uploading a report with the same filename creates the next version; earlier versions remain available to download.
 - The archive is local to the browser and device where reports were uploaded. Clearing browser site data can remove it, so download copies you need to keep elsewhere.
-- The archive keeps report files and their version history; it does not read report contents into the attendance calculator.
+- Attendance shortage and timetable PDFs can be parsed locally, reviewed, and selectively applied to the tracker. CSV, Excel, and JSON files remain archive-only.
+- The archive keeps report files and their version history. Uploading the same filename creates another version without deleting earlier copies.
+- PDF parsing currently needs selectable text; scanned image-only PDFs need manual entry or OCR outside this importer.
 
 ### 🛡️ Safe Math
 - No division-by-zero (Total = 0 shows "—" instead of NaN/Infinity).
@@ -81,10 +84,11 @@ Displays a prominent warning card: *"Attend the next X classes in a row to reach
 ├── dashboard.html   # Attendance tracker page after login
 ├── style.css    # Dark theme, glassmorphism, mobile-first responsive layout, animations
 ├── app.js           # Calculations, rendering, localStorage, optional cloud sync
+├── pdf-import.js    # Browser-side PDF extraction and editable attendance/timetable previews
 ├── main.py          # FastAPI auth, attendance, and admin API
 ├── render.yaml      # FastAPI service blueprint for Render
 ├── netlify.toml     # Netlify build and publish settings
-├── scripts/         # Creates the safe static Netlify publish bundle and API proxy
+├── scripts/         # Creates the safe static Netlify publish bundle, including PDF.js assets
 ├── models.py        # SQLAlchemy user and attendance models
 ├── schemas.py       # Pydantic v2 request/response validation
 ├── .env.example     # Environment variable template (copy to .env)
@@ -98,6 +102,14 @@ Displays a prominent warning card: *"Attend the next X classes in a row to reach
 ---
 
 ## 📅 Feature and Version History
+
+### Version 2.1.0 — 2026-11-11
+- **Attendance PDF import:** Parse subject attendance from text-based shortage reports, review/edit detected subject totals, then update matching subjects while preserving other manual entries.
+- **Timetable PDF import:** Detect weekday/subject entries, review/edit them, then merge into or replace the current timetable.
+- **Weekly planning:** Calculate which weekdays to attend or bunk based on the selected target and estimate recovery days from the timetable; incomplete data is flagged before showing a safe plan.
+- **Archive integration:** Imported PDFs are also saved in the existing versioned local report archive.
+- **Private parsing:** PDF text is extracted in the browser and is not sent to the API. Scanned image-only PDFs need manual entry or external OCR.
+- **PDF.js production assets:** Vendor PDF.js and required assets into the static Netlify bundle; use Node 22.13.0 for the build.
 
 ### Version 2.0.0 — 2026-11-11
 - **Netlify production frontend:** Added a build step that publishes only the website files, excluding backend source and local secrets.

@@ -12,6 +12,7 @@ const frontendFiles = [
   'app.js',
   'auth.js',
   'api-config.js',
+  'pdf-import.js',
 ];
 const defaultApiOrigin = 'https://bunkbudget-api-divine-grass-66506262.onrender.com';
 const apiOrigin = (process.env.BUNKBUDGET_API_URL || defaultApiOrigin).replace(/\/+$/, '');
@@ -30,6 +31,16 @@ await rm(publishDir, { recursive: true, force: true });
 await mkdir(publishDir, { recursive: true });
 for (const file of frontendFiles) {
   await cp(join(projectRoot, file), join(publishDir, file));
+}
+const pdfjsPackage = join(projectRoot, 'node_modules', 'pdfjs-dist');
+const pdfjsVendor = join(publishDir, 'vendor', 'pdfjs');
+await mkdir(pdfjsVendor, { recursive: true });
+for (const file of ['pdf.mjs', 'pdf.worker.mjs']) {
+  await cp(join(pdfjsPackage, 'build', file), join(pdfjsVendor, file));
+}
+await cp(join(pdfjsPackage, 'LICENSE'), join(pdfjsVendor, 'LICENSE'));
+for (const directory of ['cmaps', 'iccs', 'standard_fonts', 'wasm']) {
+  await cp(join(pdfjsPackage, directory), join(pdfjsVendor, directory), { recursive: true });
 }
 await writeFile(
   join(publishDir, '_redirects'),

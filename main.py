@@ -61,7 +61,7 @@ SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
 security = HTTPBearer(auto_error=False)
 password_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-app = FastAPI(title="BunkBudget API", version="2.0.0")
+app = FastAPI(title="BunkBudget API", version="2.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
