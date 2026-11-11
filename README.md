@@ -99,6 +99,12 @@ Displays a prominent warning card: *"Attend the next X classes in a row to reach
 └── README.md        # You are here
 ```
 
+## 📚 Project documents
+
+- [PRD.md](PRD.md) — product goals, requirements, user flows, and current limitations.
+- [PROJECT_BLUEPRINT.md](PROJECT_BLUEPRINT.md) — how the browser, API, database, and hosting fit together.
+- [TECH_STACK.md](TECH_STACK.md) — languages, packages, services, versions, and what each one does.
+
 ---
 
 ## 📅 Feature and Version History
