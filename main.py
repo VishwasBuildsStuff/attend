@@ -1,31 +1,32 @@
 """BunkBudget authentication, attendance, and single-owner admin API."""
 
 import os
+import sys
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
-from uuid import UUID
+from typing import Any
+from urllib.parse import parse_qsl, unquote, urlsplit
+from uuid import UUID, uuid4
 
+import asyncpg
 import jwt
-from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from passlib.context import CryptContext
-from sqlalchemy import func, or_, select, text
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from models import Base, SubjectAttendance, User
 from schemas import AdminStats, LoginRequest, SyncRequest, SubjectOutput, TokenResponse, UserCreate
 
 
-load_dotenv()
-DATABASE_URL = os.getenv("DATABASE_URL")
-SECRET_KEY = os.getenv("SECRET_KEY") or os.getenv("JWT_SECRET")
+# Local Uvicorn deployments use .env. Cloudflare Workers supply bindings through
+# each ASGI request scope and do not have a project .env file.
+if sys.platform != "emscripten":
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip().lower()
-ALLOWED_ORIGINS = [
+LOCAL_ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.getenv(
         "ALLOWED_ORIGINS",
@@ -34,41 +35,118 @@ ALLOWED_ORIGINS = [
     if origin.strip()
 ]
 
-if not DATABASE_URL:
-    raise RuntimeError("Set DATABASE_URL to a PostgreSQL async SQLAlchemy URL.")
-if not SECRET_KEY:
-    raise RuntimeError("Set SECRET_KEY to a long random JWT signing key.")
-
-database_url = make_url(DATABASE_URL)
-if database_url.drivername == "postgresql":
-    # Neon supplies standard PostgreSQL URLs; this app uses SQLAlchemy asyncpg.
-    database_url = database_url.set(drivername="postgresql+asyncpg")
-
-# asyncpg accepts `ssl`, while Neon connection strings use libpq's `sslmode`.
-# `channel_binding` is a libpq option and is not an asyncpg connection argument.
-database_query = dict(database_url.query)
-sslmode = database_query.pop("sslmode", None)
-database_query.pop("channel_binding", None)
-database_url = database_url.set(query=database_query)
-connect_args = {"ssl": sslmode} if sslmode else {}
-
-engine = create_async_engine(
-    database_url,
-    pool_pre_ping=True,
-    connect_args=connect_args,
-)
-SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
 security = HTTPBearer(auto_error=False)
-password_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 app = FastAPI(title="BunkBudget API", version="2.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=LOCAL_ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+
+def _binding_value(environment: Any, name: str) -> str | None:
+    """Read a Cloudflare binding or a local process environment variable."""
+    if environment is not None:
+        try:
+            value = getattr(environment, name)
+        except (AttributeError, TypeError):
+            try:
+                value = environment[name]
+            except (KeyError, TypeError):
+                value = None
+        if value is not None:
+            return str(value)
+    return os.getenv(name)
+
+
+def _worker_environment(request: Request) -> Any | None:
+    return request.scope.get("env")
+
+
+def _secret_key(request: Request) -> str:
+    key = _binding_value(_worker_environment(request), "SECRET_KEY") or os.getenv("JWT_SECRET")
+    if not key:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="API secret is not configured",
+        )
+    return key
+
+
+def _admin_email(request: Request) -> str:
+    return (_binding_value(_worker_environment(request), "ADMIN_EMAIL") or "").strip().lower()
+
+
+def _jwt_algorithm(request: Request) -> str:
+    return _binding_value(_worker_environment(request), "JWT_ALGORITHM") or JWT_ALGORITHM
+
+
+async def _connect_local_database() -> asyncpg.Connection:
+    dsn = os.getenv("DATABASE_URL")
+    if not dsn:
+        raise RuntimeError("Set DATABASE_URL in the project .env file.")
+
+    # Parse Neon/libpq URLs into asyncpg arguments. asyncpg accepts ssl but not
+    # libpq's sslmode or channel_binding query parameters.
+    if dsn.startswith("postgresql+asyncpg://"):
+        dsn = dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
+    parsed = urlsplit(dsn)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    sslmode = query.pop("sslmode", None)
+    query.pop("channel_binding", None)
+    connect_args: dict[str, Any] = {
+        "user": unquote(parsed.username or ""),
+        "password": unquote(parsed.password or ""),
+        "host": parsed.hostname,
+        "port": parsed.port or 5432,
+        "database": unquote(parsed.path.lstrip("/")),
+        "ssl": sslmode if sslmode in {"require", "verify-ca", "verify-full"} else None,
+    }
+    if "application_name" in query:
+        connect_args["server_settings"] = {"application_name": query["application_name"]}
+    return await asyncpg.connect(**connect_args)
+
+
+async def _connect_database(request: Request) -> asyncpg.Connection:
+    environment = _worker_environment(request)
+    hyperdrive = None
+    if environment is not None:
+        try:
+            hyperdrive = getattr(environment, "HYPERDRIVE")
+        except (AttributeError, TypeError):
+            try:
+                hyperdrive = environment["HYPERDRIVE"]
+            except (KeyError, TypeError):
+                pass
+
+    if hyperdrive is None:
+        return await _connect_local_database()
+
+    return await asyncpg.connect(
+        host=str(hyperdrive.host),
+        port=int(hyperdrive.port),
+        user=str(hyperdrive.user),
+        password=str(hyperdrive.password),
+        database=str(hyperdrive.database),
+        # Hyperdrive terminates TLS and provides its own pooled connection to Neon.
+        ssl=False,
+    )
+
+
+async def get_db(request: Request) -> AsyncIterator[asyncpg.Connection]:
+    try:
+        connection = await _connect_database(request)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection is unavailable",
+        ) from exc
+    try:
+        yield connection
+    finally:
+        await connection.close()
 
 
 @app.get("/api/health")
@@ -76,21 +154,19 @@ async def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
-async def get_db() -> AsyncIterator[AsyncSession]:
-    async with SessionFactory() as session:
-        yield session
-
-
-def create_access_token(user_id: UUID) -> str:
+def create_access_token(user_id: UUID, request: Request) -> str:
     now = datetime.now(timezone.utc)
     return jwt.encode(
         {"sub": str(user_id), "iat": now, "exp": now + timedelta(minutes=60)},
-        SECRET_KEY,
-        algorithm=JWT_ALGORITHM,
+        _secret_key(request),
+        algorithm=_jwt_algorithm(request),
     )
 
 
-def decode_user_id(credentials: HTTPAuthorizationCredentials | None) -> UUID:
+def decode_user_id(
+    credentials: HTTPAuthorizationCredentials | None,
+    request: Request,
+) -> UUID:
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -100,11 +176,13 @@ def decode_user_id(credentials: HTTPAuthorizationCredentials | None) -> UUID:
     try:
         claims = jwt.decode(
             credentials.credentials,
-            SECRET_KEY,
-            algorithms=[JWT_ALGORITHM],
+            _secret_key(request),
+            algorithms=[_jwt_algorithm(request)],
             options={"require_sub": True, "require_exp": True},
         )
         return UUID(claims["sub"])
+    except HTTPException:
+        raise
     except (jwt.PyJWTError, KeyError, TypeError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -113,247 +191,250 @@ def decode_user_id(credentials: HTTPAuthorizationCredentials | None) -> UUID:
         )
 
 
-@app.on_event("startup")
-async def create_tables() -> None:
-    # create_all handles new installs; these additive statements upgrade the
-    # earlier BunkBudget users table without overwriting existing records.
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-        await connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(120)"))
-        await connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(254)"))
-        await connection.execute(
-            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS student_class VARCHAR(80)")
-        )
-        await connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS registration_number VARCHAR(40)"))
-        await connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20)"))
-        await connection.execute(
-            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'student'")
-        )
-        await connection.execute(
-            text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email_ci "
-                "ON users (lower(email)) WHERE email IS NOT NULL"
-            )
-        )
-        await connection.execute(
-            text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_usn_ci "
-                "ON users (lower(usn)) WHERE usn IS NOT NULL"
-            )
-        )
-        await connection.execute(
-            text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_registration_ci "
-                "ON users (lower(registration_number)) WHERE registration_number IS NOT NULL"
-            )
-        )
-        if ADMIN_EMAIL:
-            await connection.execute(
-                text(
-                    "UPDATE users SET role = 'student' WHERE role = 'admin' "
-                    "AND (email IS NULL OR lower(email) <> :admin_email)"
-                ),
-                {"admin_email": ADMIN_EMAIL},
-            )
-        else:
-            await connection.execute(text("UPDATE users SET role = 'student' WHERE role = 'admin'"))
-
-
-@app.on_event("shutdown")
-async def close_engine() -> None:
-    await engine.dispose()
-
-
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> UUID:
-    return decode_user_id(credentials)
+    return decode_user_id(credentials, request)
 
 
 async def get_current_admin(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
-    db: AsyncSession = Depends(get_db),
-) -> User:
-    user_id = decode_user_id(credentials)
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
+    db: asyncpg.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    user_id = decode_user_id(credentials, request)
+    user = await db.fetchrow(
+        "SELECT id, email, role FROM users WHERE id = $1",
+        user_id,
+    )
+    admin_email = _admin_email(request)
     if (
         user is None
-        or not ADMIN_EMAIL
-        or user.role != "admin"
-        or not user.email
-        or user.email.strip().lower() != ADMIN_EMAIL
+        or not admin_email
+        or user["role"] != "admin"
+        or not user["email"]
+        or user["email"].strip().lower() != admin_email
     ):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
-    return user
+    return dict(user)
 
 
 @app.post("/api/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register_user(
     payload: UserCreate,
-    db: AsyncSession = Depends(get_db),
+    request: Request,
+    db: asyncpg.Connection = Depends(get_db),
 ) -> TokenResponse:
     usn = payload.usn.strip().upper()
     registration_number = payload.registration_number.strip().upper()
-    duplicate = await db.execute(
-        select(User.id)
-        .where(
-            or_(
-                func.lower(User.usn) == usn.lower(),
-                func.lower(User.registration_number) == registration_number.lower(),
-                func.lower(User.email) == payload.email,
-            )
-        )
-        .limit(1)
+    duplicate = await db.fetchval(
+        """
+        SELECT id FROM users
+        WHERE lower(usn) = lower($1)
+           OR lower(registration_number) = lower($2)
+           OR lower(email) = lower($3)
+        LIMIT 1
+        """,
+        usn,
+        registration_number,
+        payload.email,
     )
-    if duplicate.scalar_one_or_none() is not None:
+    if duplicate is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An account already exists with this USN, registration number, or email",
         )
 
-    user = User(
-        full_name=payload.full_name,
-        student_class=payload.student_class,
-        email=payload.email,
-        usn=usn,
-        registration_number=registration_number,
-        phone_number=payload.phone_number,
-        role="student",  # Never accept a role from the registration request.
-        hashed_password=password_context.hash(payload.password),
-    )
-    db.add(user)
+    user_id = uuid4()
     try:
-        await db.commit()
-        await db.refresh(user)
-    except IntegrityError:
-        await db.rollback()
+        await db.execute(
+            """
+            INSERT INTO users (
+                id, full_name, student_class, email, usn, registration_number,
+                phone_number, role, hashed_password
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, 'student', crypt($8, gen_salt('bf', 12))
+            )
+            """,
+            user_id,
+            payload.full_name,
+            payload.student_class,
+            payload.email,
+            usn,
+            registration_number,
+            payload.phone_number,
+            payload.password,
+        )
+    except asyncpg.UniqueViolationError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An account already exists with this USN, registration number, or email",
-        )
-    return TokenResponse(access_token=create_access_token(user.id))
+        ) from exc
+
+    return TokenResponse(access_token=create_access_token(user_id, request))
 
 
 @app.post("/api/login", response_model=TokenResponse)
 async def login_user(
     payload: LoginRequest,
-    db: AsyncSession = Depends(get_db),
+    request: Request,
+    db: asyncpg.Connection = Depends(get_db),
 ) -> TokenResponse:
     identifier = payload.identifier.strip().lower()
-    result = await db.execute(
-        select(User)
-        .where(
-            or_(
-                func.lower(User.usn) == identifier,
-                func.lower(User.registration_number) == identifier,
-                func.lower(User.email) == identifier,
-            )
-        )
-        .limit(2)
+    users = await db.fetch(
+        """
+        SELECT id, hashed_password,
+               replace(hashed_password, '$2b$', '$2a$') = crypt(
+                   $1,
+                   replace(hashed_password, '$2b$', '$2a$')
+               ) AS password_matches
+        FROM users
+        WHERE lower(usn) = $2
+           OR lower(registration_number) = $2
+           OR lower(email) = $2
+        LIMIT 2
+        """,
+        payload.password,
+        identifier,
     )
-    users = result.scalars().all()
-    if len(users) != 1:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid identifier or password")
-
-    user = users[0]
-    try:
-        password_matches = password_context.verify(payload.password, user.hashed_password)
-    except (TypeError, ValueError):
-        password_matches = False
-    if not password_matches:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid identifier or password")
-    return TokenResponse(access_token=create_access_token(user.id))
+    if len(users) != 1 or not users[0]["password_matches"]:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid identifier or password",
+        )
+    return TokenResponse(access_token=create_access_token(users[0]["id"], request))
 
 
 @app.get("/api/admin/stats", response_model=AdminStats)
 async def get_admin_stats(
-    admin: User = Depends(get_current_admin),
-    db: AsyncSession = Depends(get_db),
+    admin: dict[str, Any] = Depends(get_current_admin),
+    db: asyncpg.Connection = Depends(get_db),
 ) -> AdminStats:
-    total_users = await db.scalar(select(func.count()).select_from(User)) or 0
-    total_students = await db.scalar(
-        select(func.count()).select_from(User).where(User.role == "student")
-    ) or 0
-    total_subject_records = await db.scalar(
-        select(func.count()).select_from(SubjectAttendance)
-    ) or 0
-    return AdminStats(
-        total_users=total_users,
-        total_students=total_students,
-        total_subject_records=total_subject_records,
+    counts = await db.fetchrow(
+        """
+        SELECT count(*) AS total_users,
+               count(*) FILTER (WHERE role = 'student') AS total_students,
+               (SELECT count(*) FROM subject_attendance) AS total_subject_records
+        FROM users
+        """
     )
+    return AdminStats(**dict(counts))
 
 
 @app.post("/api/sync", response_model=list[SubjectOutput])
 async def sync_subjects(
     payload: SyncRequest,
     user_uuid: UUID = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> list[SubjectAttendance]:
+    db: asyncpg.Connection = Depends(get_db),
+) -> list[dict[str, Any]]:
     subjects = payload.subjects
     client_ids = [subject.client_subject_id for subject in subjects]
     if len(client_ids) != len(set(client_ids)):
         raise HTTPException(status_code=422, detail="Duplicate client_subject_id in request")
 
     try:
-        for item in subjects:
-            result = await db.execute(
-                select(SubjectAttendance).where(
-                    SubjectAttendance.user_uuid == user_uuid,
-                    SubjectAttendance.client_subject_id == item.client_subject_id,
+        async with db.transaction():
+            for item in subjects:
+                await db.execute(
+                    """
+                    INSERT INTO subject_attendance (
+                        id, user_uuid, client_subject_id, subject_name,
+                        classes_attended, total_classes, target_percentage
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT (user_uuid, client_subject_id) DO UPDATE SET
+                        subject_name = EXCLUDED.subject_name,
+                        classes_attended = EXCLUDED.classes_attended,
+                        total_classes = EXCLUDED.total_classes,
+                        target_percentage = EXCLUDED.target_percentage
+                    """,
+                    uuid4(),
+                    user_uuid,
+                    item.client_subject_id,
+                    item.subject_name,
+                    item.classes_attended,
+                    item.total_classes,
+                    item.target_percentage,
                 )
-            )
-            row = result.scalar_one_or_none()
-            if row is None:
-                db.add(SubjectAttendance(
-                    user_uuid=user_uuid,
-                    client_subject_id=item.client_subject_id,
-                    subject_name=item.subject_name,
-                    classes_attended=item.classes_attended,
-                    total_classes=item.total_classes,
-                    target_percentage=item.target_percentage,
-                ))
-            else:
-                row.subject_name = item.subject_name
-                row.classes_attended = item.classes_attended
-                row.total_classes = item.total_classes
-                row.target_percentage = item.target_percentage
 
-        if payload.replace_all:
-            retained_ids = [item.client_subject_id for item in subjects]
-            delete_query = select(SubjectAttendance).where(
-                SubjectAttendance.user_uuid == user_uuid
-            )
-            if retained_ids:
-                delete_query = delete_query.where(
-                    SubjectAttendance.client_subject_id.not_in(retained_ids)
-                )
-            stale_rows = await db.execute(delete_query)
-            for stale_row in stale_rows.scalars():
-                await db.delete(stale_row)
+            if payload.replace_all:
+                if client_ids:
+                    await db.execute(
+                        """
+                        DELETE FROM subject_attendance
+                        WHERE user_uuid = $1
+                          AND NOT (client_subject_id = ANY($2::text[]))
+                        """,
+                        user_uuid,
+                        client_ids,
+                    )
+                else:
+                    await db.execute(
+                        "DELETE FROM subject_attendance WHERE user_uuid = $1",
+                        user_uuid,
+                    )
+    except asyncpg.UniqueViolationError as exc:
+        raise HTTPException(status_code=409, detail="Attendance record already exists") from exc
 
-        await db.commit()
-    except Exception:
-        await db.rollback()
-        raise
-
-    result = await db.execute(
-        select(SubjectAttendance)
-        .where(SubjectAttendance.user_uuid == user_uuid)
-        .order_by(SubjectAttendance.subject_name, SubjectAttendance.id)
+    rows = await db.fetch(
+        """
+        SELECT id, client_subject_id, subject_name, classes_attended,
+               total_classes, target_percentage
+        FROM subject_attendance
+        WHERE user_uuid = $1
+        ORDER BY subject_name, id
+        """,
+        user_uuid,
     )
-    return list(result.scalars().all())
+    return [dict(row) for row in rows]
 
 
 @app.get("/api/attendance", response_model=list[SubjectOutput])
 async def get_attendance(
     user_uuid: UUID = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> list[SubjectAttendance]:
-    result = await db.execute(
-        select(SubjectAttendance)
-        .where(SubjectAttendance.user_uuid == user_uuid)
-        .order_by(SubjectAttendance.subject_name, SubjectAttendance.id)
+    db: asyncpg.Connection = Depends(get_db),
+) -> list[dict[str, Any]]:
+    rows = await db.fetch(
+        """
+        SELECT id, client_subject_id, subject_name, classes_attended,
+               total_classes, target_percentage
+        FROM subject_attendance
+        WHERE user_uuid = $1
+        ORDER BY subject_name, id
+        """,
+        user_uuid,
     )
-    return list(result.scalars().all())
+    return [dict(row) for row in rows]
+
+
+async def _static_asset(request: Request, path: str) -> Response:
+    if path == "api" or path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="API route not found")
+
+    environment = _worker_environment(request)
+    if environment is None:
+        raise HTTPException(status_code=404, detail="Page not found")
+    try:
+        assets = getattr(environment, "ASSETS")
+    except (AttributeError, TypeError):
+        try:
+            assets = environment["ASSETS"]
+        except (KeyError, TypeError):
+            raise HTTPException(status_code=404, detail="Page not found")
+
+    asset_response = await assets.fetch(f"https://assets.local/{path}")
+    return Response(
+        content=await asset_response.bytes(),
+        status_code=asset_response.status,
+        headers=asset_response.headers,
+    )
+
+
+@app.get("/", include_in_schema=False)
+async def serve_homepage(request: Request) -> Response:
+    return await _static_asset(request, "")
+
+
+@app.get("/{path:path}", include_in_schema=False)
+async def serve_frontend_asset(path: str, request: Request) -> Response:
+    return await _static_asset(request, path)

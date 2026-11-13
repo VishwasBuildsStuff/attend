@@ -2,7 +2,7 @@
 
 A modern, responsive, dark-mode attendance tracker with a FastAPI/PostgreSQL backend, student login, cloud sync, timetable planning, and report archive.
 
-The frontend uses **Vanilla JavaScript** with no framework or build step. The optional API uses FastAPI and PostgreSQL.
+The frontend uses **Vanilla JavaScript** with no application framework. A small build step bundles the PDF.js assets for Cloudflare Workers or the optional Netlify frontend. The FastAPI API uses Neon PostgreSQL.
 
 ### 🔐 Student Login
 - Sign in with a **USN, registration number, or email** and your password.
@@ -11,8 +11,8 @@ The frontend uses **Vanilla JavaScript** with no framework or build step. The op
 
 ### 🛡️ Single-owner admin
 - Registration always assigns `role="student"`; role is not accepted in the request schema.
-- `/api/admin/stats` requires both `role="admin"` and an email matching `ADMIN_EMAIL` from `.env`.
-- Other admin-role rows are demoted to students at startup. The configured owner account must be promoted explicitly in the database after verification.
+- `/api/admin/stats` requires both `role="admin"` and an email matching `ADMIN_EMAIL` from the API environment.
+- Promote the verified owner account with `python scripts/promote_admin.py owner@example.com`. Other admin rows cannot use the protected route unless they match the configured owner email.
 
 ---
 
@@ -80,21 +80,23 @@ Displays a prominent warning card: *"Attend the next X classes in a row to reach
 ├── index.html       # Redirects to the authentication page
 ├── auth.html        # Unified sign-in/sign-up page
 ├── auth.js          # Sign-in/sign-up requests, token storage, and dashboard redirect
-├── api-config.js    # Local API URL; production requests use Netlify's same-origin proxy
+├── api-config.js    # Local API URL; production calls the same-origin /api path
 ├── dashboard.html   # Attendance tracker page after login
 ├── style.css    # Dark theme, glassmorphism, mobile-first responsive layout, animations
 ├── app.js           # Calculations, rendering, localStorage, optional cloud sync
 ├── pdf-import.js    # Browser-side PDF extraction and editable attendance/timetable previews
 ├── main.py          # FastAPI auth, attendance, and admin API
-├── render.yaml      # FastAPI service blueprint for Render
+├── render.yaml      # Optional conventional web-service blueprint
 ├── netlify.toml     # Netlify build and publish settings
-├── scripts/         # Creates the safe static Netlify publish bundle, including PDF.js assets
+├── wrangler.jsonc   # Cloudflare Python Worker configuration
+├── worker.py        # FastAPI ASGI entrypoint for Cloudflare Workers
+├── pyproject.toml   # Python Worker dependencies
+├── scripts/         # Frontend builders, admin CLI, and Neon migration
 ├── models.py        # SQLAlchemy user and attendance models
 ├── schemas.py       # Pydantic v2 request/response validation
 ├── .env.example     # Environment variable template (copy to .env)
-├── .neon            # Linked Neon organization, project, and branch IDs
 ├── neon.ts          # Neon branch configuration
-├── package.json     # Neon setup dependencies
+├── package.json     # Frontend build and PDF.js dependencies
 ├── requirements.txt # Python backend dependencies
 └── README.md        # You are here
 ```
@@ -195,36 +197,37 @@ Let `P` = present, `T` = total conducted, `N` = NA slots, `E = T − N` (effecti
 ## 🚀 Run It Locally
 
 1. Install backend dependencies with `pip install -r requirements.txt`.
-2. Keep `.env` local and ignored by Git. For the linked Neon project, Neon CLI has populated `DATABASE_URL` and branch metadata in `.env`; set a long random `SECRET_KEY` and the single owner's `ADMIN_EMAIL` there if they are not already configured. For another database, copy `.env.example` to `.env` and fill its values. `load_dotenv()` reads this file.
-3. Start the API from PowerShell:
+2. Keep `.env` local and ignored by Git. For the linked Neon project, Neon CLI has populated `DATABASE_URL` and branch metadata in `.env`; set a long random `SECRET_KEY` and the single owner's `ADMIN_EMAIL` there if they are not already configured. For another database, copy `.env.example` to `.env` and fill its values. `load_dotenv()` reads this file during local Uvicorn runs.
+3. Run `scripts/cloudflare-neon-migration.sql` once in the intended Neon branch. It prepares the schema and enables `pgcrypto` without deleting existing rows.
+4. Start the API from PowerShell:
 
    ```powershell
    uvicorn main:app --reload --port 8000
    ```
 
-4. In a second terminal, serve the project root with `python -m http.server 5500`, then visit `http://localhost:5500`.
+5. In a second terminal, serve the project root with `python -m http.server 5500`, then visit `http://localhost:5500`.
 
-The API creates its tables and applies additive startup upgrades. Neon’s pooled `DATABASE_URL` is used by the async SQLAlchemy backend; `DATABASE_URL_UNPOOLED` is available for migration or direct database tasks. Signup requires a valid email, class, USN, registration number, phone, and matching password confirmation; it has no semester-based rules. Passwords are stored as bcrypt hashes. Login accepts the student's USN, registration number, or email. New accounts are always students.
+The API no longer creates or alters tables on startup. Run `scripts/cloudflare-neon-migration.sql` once before using a new database. Local Uvicorn uses Neon’s pooled `DATABASE_URL` through `asyncpg`; `DATABASE_URL_UNPOOLED` is available for migrations or direct database tasks. Signup requires a valid email, class, USN, registration number, phone, and matching password confirmation; it has no semester-based rules. Passwords remain bcrypt hashes, created and verified with Neon `pgcrypto`. Login accepts the student's USN, registration number, or email. New accounts are always students.
 
-To grant the one configured owner admin access, first create that account, then promote that exact verified email directly in PostgreSQL, for example: `UPDATE users SET role = 'admin' WHERE lower(email) = lower('owner@example.com');` Replace the address with `ADMIN_EMAIL`. No public API accepts a role. Admin requests receive 403 unless both the JWT user's database role is `admin` and their email equals `ADMIN_EMAIL`.
+To grant the configured owner admin access, first create that account, then run `python scripts/promote_admin.py owner@example.com` from the repository root. Replace the address with the exact `ADMIN_EMAIL`. The script reads `DATABASE_URL` from `.env`, promotes only an existing account, and reports if no matching user exists. No public API accepts a role. Admin requests receive 403 unless both the JWT user's database role is `admin` and their email equals `ADMIN_EMAIL`.
 
 ### Login troubleshooting
 
-For local use, confirm the backend dependencies are installed, `.env` contains a reachable PostgreSQL `DATABASE_URL` and `SECRET_KEY`, `uvicorn main:app --reload --port 8000` is running, and the frontend is served from `http://localhost:5500` (not opened directly as a `file://` page). In production, open `https://your-render-service.onrender.com/api/health` and confirm it returns `{"status":"ok"}`. A Render `404 Not Found` with `x-render-routing: no-server` means there is no web service deployed at that hostname. Deploy the FastAPI service from `render.yaml`, then set Netlify's `BUNKBUDGET_API_URL` to that exact Render service origin and redeploy the Netlify site.
+For local use, confirm the backend dependencies are installed, `.env` contains a reachable PostgreSQL `DATABASE_URL` and `SECRET_KEY`, `uvicorn main:app --reload --port 8000` is running, and the frontend is served from `http://localhost:5500` (not opened directly as a `file://` page). For Cloudflare, use the setup in [CLOUDFLARE_DEPLOYMENT.md](CLOUDFLARE_DEPLOYMENT.md), then confirm the Worker health endpoint returns `{"status":"ok"}`.
 
 ---
 
 ## 🌐 Deploy It
 
-The public frontend and API need separate hosting: Netlify publishes the static HTML/CSS/JS, while Render runs FastAPI and Neon stores PostgreSQL data. The Netlify build proxies `/api/*` to the Render API so browser requests stay on the Netlify origin. Keep `.env` out of the repository.
+Cloudflare can serve the static frontend and FastAPI API from the same Worker, while Neon stores PostgreSQL data. Netlify remains optional for the frontend. Keep `.env` out of the repository.
 
-1. Push this project to a Git provider repository. `.env` is ignored; do not add credentials to source control.
-2. In Render, create a Blueprint from that repository. Render reads `render.yaml`, installs `requirements.txt`, and starts FastAPI on its assigned port. Enter `DATABASE_URL` from your local `.env` and the owner `ADMIN_EMAIL` in Render's secret prompts; Render generates `SECRET_KEY`.
-3. Confirm the Render API is healthy at `/api/health`. Its expected URL is `https://bunkbudget-api-divine-grass-66506262.onrender.com`.
-4. In Netlify, import the same repository. Netlify reads `netlify.toml`, runs `npm run build`, and publishes `dist/`. If Render assigned a different URL, set Netlify's `BUNKBUDGET_API_URL` environment variable to the API origin (for example, `https://your-service.onrender.com`) and redeploy.
-5. Open the Netlify site URL. For a manual Netlify Drop deployment, run `npm run build` locally and upload only the generated `dist` folder; the FastAPI service still needs to be deployed separately on Render.
+1. Run `scripts/cloudflare-neon-migration.sql` in the Neon SQL Editor for the intended database branch.
+2. Create a Cloudflare Hyperdrive configuration for Neon and copy its ID into `wrangler.jsonc`. Set `SECRET_KEY` and `ADMIN_EMAIL` as Worker settings; do not commit secrets.
+3. Confirm the Hyperdrive ID in `wrangler.jsonc` matches the configuration you created. Configure the Cloudflare GitHub build with root `/`, build command `uv sync && npm ci && npm run build:worker`, and deploy command `uv run pywrangler deploy`.
+4. Confirm `https://attend.vishwasbnglr2024.workers.dev/api/health` returns `{"status":"ok"}`.
+5. Open `https://attend.vishwasbnglr2024.workers.dev/auth` to use the app. If you choose to keep Netlify for the frontend, set `BUNKBUDGET_API_URL` to `https://attend.vishwasbnglr2024.workers.dev` and redeploy Netlify.
 
-Netlify supports proxying API paths with a `200` rewrite while keeping the browser URL unchanged. Render provides public web services for FastAPI and reads secrets from service environment variables. See [Netlify rewrites and proxies](https://docs.netlify.com/manage/routing/redirects/rewrites-proxies/) and [Render's FastAPI deployment guide](https://render.com/docs/deploy-fastapi).
+See [CLOUDFLARE_DEPLOYMENT.md](CLOUDFLARE_DEPLOYMENT.md) for setup details and Worker limits. Netlify's proxy keeps browser requests on the frontend origin.
 
 ---
 

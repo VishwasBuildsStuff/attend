@@ -1,0 +1,17 @@
+[project]
+name = "bunkbudget-cloudflare"
+version = "0.1.0"
+description = "BunkBudget FastAPI service for Cloudflare Python Workers"
+requires-python = ">=3.13"
+dependencies = [
+    "asyncpg>=0.29,<0.32",
+    "fastapi>=0.115,<1.0",
+    "PyJWT>=2.8,<3.0",
+    "pydantic>=2.8,<3.0",
+]
+
+[dependency-groups]
+dev = [
+    "workers-py",
+    "workers-runtime-sdk",
+]

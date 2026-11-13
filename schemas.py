@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+USN_PATTERN = re.compile(r"^[1-9][A-Z]{2}[0-9]{2}[A-Z]{2}[0-9]{3}$")
+REGISTRATION_NUMBER_PATTERN = re.compile(r"^[A-Z0-9]{1,40}$")
 
 
 class UserCreate(BaseModel):
@@ -46,8 +48,15 @@ class UserCreate(BaseModel):
     @field_validator("usn")
     @classmethod
     def validate_usn_format(cls, value: str) -> str:
-        if not re.fullmatch(r"[A-Za-z0-9]{10}", value):
-            raise ValueError("USN must contain exactly 10 letters or numbers")
+        if not USN_PATTERN.fullmatch(value):
+            raise ValueError("Enter a valid USN (for example, 1AB23CD456)")
+        return value
+
+    @field_validator("registration_number")
+    @classmethod
+    def validate_registration_number_format(cls, value: str) -> str:
+        if not REGISTRATION_NUMBER_PATTERN.fullmatch(value):
+            raise ValueError("Registration number must contain only letters and numbers")
         return value
 
     @field_validator("phone_number")

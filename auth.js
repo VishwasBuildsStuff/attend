@@ -52,9 +52,9 @@
         : response.status === 409
           ? 'An account already exists with this USN, registration number, or email.'
           : response.status === 404
-            ? 'The login API was not found. Deploy the FastAPI service on Render and point Netlify BUNKBUDGET_API_URL to its service URL.'
+            ? 'The API route was not found in this Cloudflare Worker deployment. Deploy the BunkBudget FastAPI Worker and try again.'
             : [502, 503, 504].includes(response.status)
-              ? 'The login server is unavailable. Check that the FastAPI service is running on Render.'
+              ? 'The login server is unavailable. Check the Cloudflare Worker logs and Neon Hyperdrive configuration.'
               : detail || `The server could not complete the request (HTTP ${response.status}). Check the API deployment logs and try again.`;
       throw new Error(message);
     }

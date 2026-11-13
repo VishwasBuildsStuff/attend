@@ -14,7 +14,7 @@ const frontendFiles = [
   'api-config.js',
   'pdf-import.js',
 ];
-const defaultApiOrigin = 'https://bunkbudget-api-divine-grass-66506262.onrender.com';
+const defaultApiOrigin = 'https://attend.vishwasbnglr2024.workers.dev';
 const apiOrigin = (process.env.BUNKBUDGET_API_URL || defaultApiOrigin).replace(/\/+$/, '');
 
 let parsedApiOrigin;

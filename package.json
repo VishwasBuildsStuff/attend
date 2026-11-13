@@ -1,6 +1,8 @@
 {
   "scripts": {
-    "build": "node scripts/build-netlify.mjs"
+    "build": "node scripts/build-netlify.mjs",
+    "build:worker": "node scripts/build-cloudflare.mjs",
+    "deploy:worker": "uv run pywrangler deploy"
   },
   "dependencies": {
     "@neon/config": "^1.14.0",

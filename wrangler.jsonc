@@ -1,0 +1,24 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "attend",
+	"main": "worker.py",
+	"compatibility_date": "2026-11-13",
+	"compatibility_flags": [
+		"python_workers"
+	],
+	"workers_dev": true,
+	"vars": {
+		"JWT_ALGORITHM": "HS256"
+	},
+	"assets": {
+		"directory": "./dist/",
+		"binding": "ASSETS",
+		"run_worker_first": true
+	},
+	"hyperdrive": [
+		{
+			"binding": "HYPERDRIVE",
+			"id": "1bb359f42fa448658a656edd3fffa4c4"
+		}
+	]
+}
